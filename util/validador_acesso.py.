@@ -1,0 +1,21 @@
+docente_requisitante = {
+    "nome": "Prof. Silva", # String
+    "ativo": True,         # Boolean (Status)
+    "id_cracha": 1045,     # Integer (Tag RFID)
+    "admin": False         # Boolean (Permissão)
+}
+
+hora_atual = 23
+
+if hora_atual >= 23 or hora_atual < 5:
+    print("Acesso Negado: Fora do horário comercial.")
+    bloquear_fechadura()
+    
+    if not docente_ativo:
+        rejeitar("Cadastro Inativo")
+    elif hora_atual >= 23 or hora_atual < 5:
+        rejeitar("Trava Noturna")
+    elif nicho_ocupado:
+        rejeitar("Chave Indisponível")
+    else:
+        liberar_chave()
