@@ -11,11 +11,12 @@ if hora_atual >= 23 or hora_atual < 5:
     print("Acesso Negado: Fora do horário comercial.")
     bloquear_fechadura()
     
-    if not docente_ativo:
-        rejeitar("Cadastro Inativo")
+    if not docente_requisitante["ativo"]:
+        print("Acesso negado: Docente Inativo.")
     elif hora_atual >= 23 or hora_atual < 5:
-        rejeitar("Trava Noturna")
-    elif nicho_ocupado:
-        rejeitar("Chave Indisponível")
+        print("Acesso negado: Fora do horário comercial.")
+    elif docente_requisitante["admin"]:
+        print("Acesso negado: chave indisponível.")
     else:
-        liberar_chave()
+        print(f"Acesso aprovado para {docente_requisitante['nome']}.")
+        print("Acionar aqui a função real para liberar a chave.")
