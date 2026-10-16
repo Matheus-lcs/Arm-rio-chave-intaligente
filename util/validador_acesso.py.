@@ -1,22 +1,218 @@
-docente_requisitante = {
-    "nome": "Prof. Silva", # String
-    "ativo": True,         # Boolean (Status)
-    "id_cracha": 1045,     # Integer (Tag RFID)
-    "admin": False         # Boolean (Permissão)
-}
+"""Controle de acesso por crachá RFID para docentes.
 
-hora_atual = 23
+Regras (em ordem de prioridade):
+1. Crachá não cadastrado na biblioteca -> negado.
+2. Docente inativo -> negado.
+3. Fora do horário comercial (23h às 4h59) -> negado, exceto para admin.
+4. Caso contrário -> aprovado.
+"""
 
-if hora_atual >= 23 or hora_atual < 5:
-    print("Acesso Negado: Fora do horário comercial.")
-    bloquear_fechadura()
-    
-    if not docente_requisitante["ativo"]:
-        print("Acesso negado: Docente Inativo.")
-    elif hora_atual >= 23 or hora_atual < 5:
-        print("Acesso negado: Fora do horário comercial.")
-    elif docente_requisitante["admin"]:
-        print("Acesso negado: chave indisponível.")
+from dataclasses import dataclass, replace
+from datetime import datetime
+from enum import Enum
+import logging
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+log = logging.getLogger("controle_acesso")
+
+# --- Configuração ---------------------------------------------------------
+HORA_INICIO_BLOQUEIO = 23  # a partir das 23h (inclusive)
+HORA_FIM_BLOQUEIO = 5      # até 4h59 (5h já é liberado)
+
+
+# --- Modelos --------------------------------------------------------------
+@dataclass(frozen=True)
+class Docente:
+    id_cracha: int
+    nome_completo: str
+    cargo: str
+    ativo: bool = True
+    admin: bool = False
+
+
+class Motivo(Enum):
+    APROVADO = "Acesso aprovado."
+    CRACHA_NAO_CADASTRADO = "Acesso negado: crachá não cadastrado."
+    INATIVO = "Acesso negado: docente inativo."
+    FORA_DO_HORARIO = "Acesso negado: fora do horário comercial."
+
+
+@dataclass(frozen=True)
+class Decisao:
+    liberado: bool
+    motivo: Motivo
+    docente: Docente | None = None
+
+
+# --- Biblioteca de docentes -----------------------------------------------
+class BibliotecaDocentes:
+    """Cadastro de docentes, indexado pelo número do crachá."""
+
+    def __init__(self, docentes: list[Docente] | None = None) -> None:
+        self._docentes: dict[int, Docente] = {}
+        for docente in docentes or []:
+            self.cadastrar(docente)
+
+    def cadastrar(self, docente: Docente) -> None:
+        if not isinstance(docente.id_cracha, int) or isinstance(docente.id_cracha, bool):
+            raise ValueError(f"id_cracha inválido: {docente.id_cracha!r}")
+        if not docente.nome_completo.strip():
+            raise ValueError("nome_completo não pode ser vazio.")
+        if not docente.cargo.strip():
+            raise ValueError("cargo não pode ser vazio.")
+        if docente.id_cracha in self._docentes:
+            raise ValueError(f"Crachá {docente.id_cracha} já cadastrado.")
+        self._docentes[docente.id_cracha] = docente
+
+    def buscar(self, id_cracha: int) -> Docente | None:
+        return self._docentes.get(id_cracha)
+
+    def buscar_por_nome(self, trecho: str) -> list[Docente]:
+        trecho = trecho.casefold()
+        return [d for d in self._docentes.values() if trecho in d.nome_completo.casefold()]
+
+    def listar(self, apenas_ativos: bool = False) -> list[Docente]:
+        docentes = sorted(self._docentes.values(), key=lambda d: d.nome_completo)
+        return [d for d in docentes if d.ativo] if apenas_ativos else docentes
+
+    def definir_ativo(self, id_cracha: int, ativo: bool) -> Docente:
+        docente = self.buscar(id_cracha)
+        if docente is None:
+            raise KeyError(f"Crachá {id_cracha} não cadastrado.")
+        atualizado = replace(docente, ativo=ativo)
+        self._docentes[id_cracha] = atualizado
+        return atualizado
+
+    def remover(self, id_cracha: int) -> None:
+        if id_cracha not in self._docentes:
+            raise KeyError(f"Crachá {id_cracha} não cadastrado.")
+        del self._docentes[id_cracha]
+
+    def __len__(self) -> int:
+        return len(self._docentes)
+
+
+# Dados de exemplo: substitua pelos docentes reais
+biblioteca = BibliotecaDocentes([
+    Docente(1045, "José Carlos da Silva", "Professor", ativo=True),
+    Docente(1046, "Maria Helena Souza", "Professora", ativo=False),
+    Docente(1047, "Ricardo Alves Pereira", "Coordenador", ativo=True, admin=True),
+])
+
+
+# --- Regras (funções puras, fáceis de testar) -----------------------------
+def validar_hora(hora: int) -> int:
+    if not isinstance(hora, int) or isinstance(hora, bool) or not 0 <= hora <= 23:
+        raise ValueError(f"Hora inválida: {hora!r}. Use um inteiro entre 0 e 23.")
+    return hora
+
+
+def fora_do_horario(hora: int) -> bool:
+    hora = validar_hora(hora)
+    return hora >= HORA_INICIO_BLOQUEIO or hora < HORA_FIM_BLOQUEIO
+
+
+def decidir_acesso(id_cracha: int, hora: int, base: BibliotecaDocentes = biblioteca) -> Decisao:
+    validar_hora(hora)
+    docente = base.buscar(id_cracha)
+
+    if docente is None:
+        return Decisao(False, Motivo.CRACHA_NAO_CADASTRADO)
+    if not docente.ativo:
+        return Decisao(False, Motivo.INATIVO, docente)
+    if fora_do_horario(hora) and not docente.admin:
+        return Decisao(False, Motivo.FORA_DO_HORARIO, docente)
+    return Decisao(True, Motivo.APROVADO, docente)
+
+
+# --- Ações de hardware (substituir pela integração real) ------------------
+def bloquear_fechadura() -> None:
+    log.info("Fechadura bloqueada.")
+
+
+def liberar_chave() -> None:
+    log.info("Chave liberada.")
+
+
+# --- Orquestração ---------------------------------------------------------
+def processar_acesso(id_cracha: int, hora: int | None = None,
+                     base: BibliotecaDocentes = biblioteca) -> Decisao:
+    """Decide e executa a ação. Se `hora` for None, usa a hora atual do sistema."""
+    if hora is None:
+        hora = datetime.now().hour
+
+    decisao = decidir_acesso(id_cracha, hora, base)
+    quem = (f"{decisao.docente.nome_completo} ({decisao.docente.cargo}), crachá {id_cracha}"
+            if decisao.docente else f"crachá {id_cracha}")
+
+    if decisao.liberado:
+        log.info("%s %s", decisao.motivo.value, quem)
+        liberar_chave()
     else:
-        print(f"Acesso aprovado para {docente_requisitante['nome']}.")
-        print("Acionar aqui a função real para liberar a chave.")
+        log.warning("%s %s", decisao.motivo.value, quem)
+        bloquear_fechadura()
+
+    return decisao
+
+
+# --- Testes rápidos -------------------------------------------------------
+def _testes() -> None:
+    base = BibliotecaDocentes([
+        Docente(1045, "José Carlos da Silva", "Professor"),
+        Docente(1046, "Maria Helena Souza", "Professora", ativo=False),
+        Docente(1047, "Ricardo Alves Pereira", "Coordenador", admin=True),
+    ])
+
+    casos = [
+        (1045, 23, Motivo.FORA_DO_HORARIO),
+        (1045, 4, Motivo.FORA_DO_HORARIO),
+        (1045, 5, Motivo.APROVADO),
+        (1045, 22, Motivo.APROVADO),
+        (1046, 10, Motivo.INATIVO),
+        (9999, 10, Motivo.CRACHA_NAO_CADASTRADO),
+        (1047, 23, Motivo.APROVADO),
+    ]
+    for cracha, hora, esperado in casos:
+        obtido = decidir_acesso(cracha, hora, base).motivo
+        assert obtido == esperado, f"crachá {cracha} às {hora}h: esperado {esperado}, obtido {obtido}"
+
+    for hora_ruim in (-1, 24, "10", 10.5, True):
+        try:
+            decidir_acesso(1045, hora_ruim, base)
+        except ValueError:
+            continue
+        raise AssertionError(f"Hora inválida {hora_ruim!r} deveria lançar ValueError")
+
+    # Biblioteca
+    try:
+        base.cadastrar(Docente(1045, "Duplicado", "Professor"))
+        raise AssertionError("Crachá duplicado deveria lançar ValueError")
+    except ValueError:
+        pass
+
+    assert len(base) == 3
+    assert [d.id_cracha for d in base.listar(apenas_ativos=True)] == [1045, 1047]
+    assert base.buscar_por_nome("helena")[0].id_cracha == 1046
+
+    base.definir_ativo(1046, True)
+    assert decidir_acesso(1046, 10, base).motivo == Motivo.APROVADO
+
+    base.remover(1046)
+    assert base.buscar(1046) is None
+
+    print("Todos os testes passaram.\n")
+
+
+if __name__ == "__main__":
+    _testes()
+
+    print("Docentes cadastrados:")
+    for d in biblioteca.listar():
+        status = "ativo" if d.ativo else "inativo"
+        print(f"  {d.id_cracha} | {d.nome_completo} | {d.cargo} | {status}")
+    print()
+
+    processar_acesso(1045, hora=23)
+    processar_acesso(1045, hora=10)
+    processar_acesso(1046, hora=10)
+    processar_acesso(9999, hora=10)
